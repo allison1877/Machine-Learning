@@ -1,0 +1,96 @@
+---
+title: "Barbell Lift Prediction"
+output: html_document
+---
+
+```{r, include=FALSE}
+library(caret)
+library(RANN)
+library(randomForest)
+
+pml.training <- read.csv("pml-training.csv", header = TRUE, stringsAsFactors = FALSE)
+
+pml.training2 <- data.frame(lapply(pml.training[,-c(1:7, 160)], 
+                                   function(x) as.numeric(x)))
+pml.training2$classe <-pml.training$classe
+```
+
+### Executive Summary
+
+We would like to predict the manner in which they did the exercise as documented in the 'classe' variable. First we will remove the columns that will not be good predictors. We then subsetted the data into a training and cross validation portion and then constructed a random forest model on the training data. Our model appears to predict with 99% accuracy and less than 1% OOB error.
+
+``` {r, include=FALSE}
+# Can check all of the covariates to see which have little variability
+# Remove the covariate columns that have less than 2% variability
+nsv <- nearZeroVar(pml.training2, saveMetrics = TRUE)
+nsv$names <- row.names(nsv)
+highvariability <- nsv$names[nsv$percentUnique>2 | nsv$names =="classe"]
+pml.training2 <- pml.training2[highvariability]
+
+# Next get rid of any remaining columns that are summaries of other columns
+summarycols <- names(pml.training2) %in% 
+     c("avg_pitch_dumbbell", "avg_roll_dumbbell", "avg_yaw_dumbbell", "var_accel_arm", "var_accel_forearm")
+pml.training2 <- pml.training2[!summarycols]
+
+# Finally get rid of columns that have majority NA
+lotsNA <- names(pml.training2) %in% 
+     c("kurtosis_roll_belt", "skewness_roll_belt", "kurtosis_roll_dumbbell", "kurtosis_picth_dumbbell", "skewness_roll_dumbbell", "skewness_pitch_dumbbell", "kurtosis_yaw_arm", "skewness_yaw_arm")
+pml.training2 <- pml.training2[!lotsNA]
+```
+
+### Model Building
+We reduced the initial set of predictors by removing the columns that show little variability (and thus will be poor predictors), columns that are summaries of other columns (marked with avg, var, etc.), and columns that have majority of NAs.
+
+After we reduced the columns we are interested in, we **split the data into a training (70%) and cross validation (30%) portion**.  Then we train the training portion of the data using K-fold cross validation with K=10 and the random forest method.
+
+```{r}
+# Split the data into a training portion and a cross validation portion
+training_part <- createDataPartition(pml.training2$classe, p = 0.7, list = FALSE)
+training <- pml.training2[training_part, ]
+crossval <- pml.training2[-training_part, ]
+
+# Use K-Fold cross validation with K=10
+ctrl <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+set.seed(1234)
+modrf <- train(classe ~., data = training, method = "rf", trControl = ctrl)
+modrf
+modrf$finalModel
+
+# The top 5 variables in terms of importance
+head(varImp(modrf)$importance, 5) 
+```
+
+The resulting random forest created 500 trees and had an **out of bounds error rate of < 1%**.  
+
+### Cross Validation
+
+Now we can use the cross validation portion that we kept out of the training set to see how our model does.  The cross validation portion had an accuracy rate of > 99%.
+
+```{r}
+crossvalpred <- predict(modrf, crossval)
+confusionMatrix(table(crossvalpred, crossval$classe))
+```
+
+### Test Set Prediction
+
+Finally we can use the model that we created on a new set of testing data.  First we remove the columns that we removed on the training set.  Then we predict using our model to determine the 20 predicted classes.
+
+```{r, include=FALSE}
+# Read in the data
+pml.testing <- read.csv("pml-testing.csv", header = TRUE, stringsAsFactors = FALSE)
+pml.testing2 <- data.frame(lapply(pml.testing[,-c(1:7, 160)], 
+                                  function(x) as.numeric(x)))
+
+# Get rid of the columns that we removed from the training set
+testing <- pml.testing2[highvariability[1:46]]
+testing <- pml.testing2[!summarycols]
+testing <- pml.testing2[!lotsNA]
+```
+
+```{r}
+# Predict the testing data based on our first model
+testpred <- predict(modrf, newdata = pml.testing2)
+testpred
+```
+
+
